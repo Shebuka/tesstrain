@@ -125,6 +125,7 @@ help:
 	@echo ""
 	@echo "  Targets"
 	@echo ""
+	@echo "	   prepare-data     Prepare all data files (all-gt, all-lstmf, list.train, list.eval) recursively"
 	@echo "    unicharset       Create unicharset"
 	@echo "    charfreq         Show character histogram"
 	@echo "    lists            Create lists of lstmf filenames for training and eval"
@@ -177,12 +178,14 @@ endif
 
 .PRECIOUS: $(LAST_CHECKPOINT)
 
-.PHONY: clean help lists proto-model tesseract-langdata training unicharset charfreq
+.PHONY: clean help lists proto-model tesseract-langdata training unicharset charfreq prepare-data
 
-ALL_FILES = $(and $(wildcard $(GROUND_TRUTH_DIR)),$(shell find -L $(GROUND_TRUTH_DIR) -name '*.gt.txt'))
-unexport ALL_FILES # prevent adding this to envp in recipes (which can cause E2BIG if too long; cf. make #44853)
+ALL_FILES = $(shell find -L $(GROUND_TRUTH_DIR) -type f -name '*.gt.txt')
+unexport ALL_FILES
 ALL_GT = $(OUTPUT_DIR)/all-gt
 ALL_LSTMF = $(OUTPUT_DIR)/all-lstmf
+LIST_TRAIN = $(OUTPUT_DIR)/list.train
+LIST_EVAL = $(OUTPUT_DIR)/list.eval
 
 # Create unicharset
 unicharset: $(OUTPUT_DIR)/unicharset
@@ -192,14 +195,37 @@ charfreq: $(ALL_GT)
 	LC_ALL=C.UTF-8 grep -P -o "\X" $< | sort | uniq -c | sort -rn
 
 # Create lists of lstmf filenames for training and eval
-lists: $(OUTPUT_DIR)/list.train $(OUTPUT_DIR)/list.eval
+lists: $(LIST_TRAIN) $(LIST_EVAL)
+
+# New target to prepare data files before training
+prepare-data: $(ALL_GT) $(ALL_LSTMF) $(LIST_TRAIN) $(LIST_EVAL)
 
 $(OUTPUT_DIR):
 	@mkdir -p $@
 
-$(OUTPUT_DIR)/list.eval \
-$(OUTPUT_DIR)/list.train: $(ALL_LSTMF) | $(OUTPUT_DIR)
-	$(PY_CMD) generate_eval_train.py $(ALL_LSTMF) $(RATIO_TRAIN)
+# Generate ALL_GT recursively from ground truth directory
+$(ALL_GT): $(ALL_FILES) | $(OUTPUT_DIR)
+	$(if $^,,$(error found no $(GROUND_TRUTH_DIR)/*.gt.txt for $@))
+	$(file >$@) $(foreach F,$^,$(file >>$@,$(file <$F)))
+
+# Generate ALL_LSTMF recursively
+$(ALL_LSTMF): $(ALL_FILES:%.gt.txt=%.lstmf) | $(OUTPUT_DIR)
+	$(if $^,,$(error found no $(GROUND_TRUTH_DIR)/*.lstmf for $@))
+	@mkdir -p $(@D)
+	$(file >$@) $(foreach F,$^,$(file >>$@,$F))
+
+# Modified list generation with recursive discovery
+$(LIST_TRAIN) $(LIST_EVAL): $(ALL_LSTMF) | $(OUTPUT_DIR)
+	@if [ ! -f $(LIST_TRAIN) ] || [ ! -f $(LIST_EVAL) ]; then \
+		echo "Generating new train/eval lists"; \
+		find -L $(GROUND_TRUTH_DIR) -type f -name '*.lstmf' | sort > $(ALL_LSTMF); \
+		total_files=$$(wc -l < $(ALL_LSTMF)); \
+		train_count=$$(echo "$$total_files * $(RATIO_TRAIN)" | bc | cut -d. -f1); \
+		head -n $$train_count $(ALL_LSTMF) > $(LIST_TRAIN); \
+		tail -n +$$((train_count + 1)) $(ALL_LSTMF) > $(LIST_EVAL); \
+	else \
+		echo "Using existing train/eval lists"; \
+	fi
 
 ifdef START_MODEL
 $(DATA_DIR)/$(START_MODEL)/$(MODEL_NAME).lstm-unicharset:
@@ -216,10 +242,12 @@ endif
 
 # Start training
 training: $(OUTPUT_DIR).traineddata
-
-$(ALL_GT): $(ALL_FILES) | $(OUTPUT_DIR)
-	$(if $^,,$(error found no $(GROUND_TRUTH_DIR)/*.gt.txt for $@))
-	$(file >$@) $(foreach F,$^,$(file >>$@,$(file <$F)))
+	@if [ -f $(LIST_TRAIN) ] && [ -f $(LIST_EVAL) ] && [ -f $(ALL_GT) ] && [ -f $(ALL_LSTMF) ]; then \
+		echo "Using existing data files for training"; \
+	else \
+		echo "Generating required data files before training"; \
+		$(MAKE) prepare-data; \
+	fi
 
 .PRECIOUS: %.box
 %.box: %.png %.gt.txt
@@ -236,12 +264,6 @@ $(ALL_GT): $(ALL_FILES) | $(OUTPUT_DIR)
 
 %.box: %.tif %.gt.txt
 	PYTHONIOENCODING=utf-8 $(PY_CMD) $(GENERATE_BOX_SCRIPT) -i "$*.tif" -t "$*.gt.txt" > "$@"
-
-$(ALL_LSTMF): $(ALL_FILES:%.gt.txt=%.lstmf)
-	$(if $^,,$(error found no $(GROUND_TRUTH_DIR)/*.lstmf for $@))
-	@mkdir -p $(@D)
-	$(file >$@) $(foreach F,$^,$(file >>$@,$F))
-	$(PY_CMD) shuffle.py $(RANDOM_SEED) "$@"
 
 .PRECIOUS: %.lstmf
 %.lstmf: %.png %.box
@@ -364,14 +386,14 @@ $(BEST_LSTMEVAL_FILES): $(OUTPUT_DIR)/eval/%.eval.log: $(OUTPUT_DIR)/tessdata_be
 TSV_LSTMEVAL = $(OUTPUT_DIR)/lstmeval.tsv
 .INTERMEDIATE: $(TSV_LSTMEVAL)
 $(TSV_LSTMEVAL): $(BEST_LSTMEVAL_FILES)
-	@echo "Name	CheckpointCER	LearningIteration	TrainingIteration	EvalCER	IterationCER	SubtrainerCER" > "$@"
+	@echo "Name CheckpointCER	LearningIteration	TrainingIteration	EvalCER IterationCER	SubtrainerCER" > "$@"
 	@{ $(foreach F,$^,echo -n "$F "; grep BCER $F;) } | sort -rn | \
-	sed -e 's|^$(OUTPUT_DIR)/eval/$(MODEL_NAME)_\([0-9.]*\)_\([0-9]*\)_\([0-9]*\).eval.log BCER eval=\([0-9.]*\).*$$|\t\1\t\2\t\3\t\4\t\t|' >>  "$@"
+	sed -e 's|^$(OUTPUT_DIR)/eval/$(MODEL_NAME)_\([0-9.]*\)_\([0-9]*\)_\([0-9]*\).eval.log BCER eval=\([0-9.]*\).*$$|\t\1\t\2\t\3\t\4\t\t|' >>	"$@"
 # Make TSV with CER at every 100 iterations.
 TSV_100_ITERATIONS = $(OUTPUT_DIR)/iteration.tsv
 .INTERMEDIATE: $(TSV_100_ITERATIONS)
 $(TSV_100_ITERATIONS): $(LOG_FILE)
-	@echo "Name	CheckpointCER	LearningIteration	TrainingIteration	EvalCER	IterationCER	SubtrainerCER" > "$@"
+	@echo "Name CheckpointCER	LearningIteration	TrainingIteration	EvalCER IterationCER	SubtrainerCER" > "$@"
 	@grep 'At iteration' $< \
 		| sed -e '/^Sub/d' \
 		| sed -e '/^Update/d' \
@@ -382,29 +404,29 @@ $(TSV_100_ITERATIONS): $(LOG_FILE)
 TSV_CHECKPOINT = $(OUTPUT_DIR)/checkpoint.tsv
 .INTERMEDIATE: $(TSV_CHECKPOINT)
 $(TSV_CHECKPOINT): $(LOG_FILE)
-	@echo "Name	CheckpointCER	LearningIteration	TrainingIteration	EvalCER	IterationCER	SubtrainerCER" > "$@"
+	@echo "Name CheckpointCER	LearningIteration	TrainingIteration	EvalCER IterationCER	SubtrainerCER" > "$@"
 	@grep 'best model' $< \
 		| sed -e 's/^.*\///' \
 		| sed -e 's/\.checkpoint.*$$/\t\t\t/' \
-		| sed -e 's/_/\t/g' >>  "$@"
+		| sed -e 's/_/\t/g' >>	"$@"
 # Make TSV with Eval CER.
 TSV_EVAL = $(OUTPUT_DIR)/eval.tsv
 .INTERMEDIATE: $(TSV_EVAL)
 $(TSV_EVAL): $(LOG_FILE)
-	@echo "Name	CheckpointCER	LearningIteration	TrainingIteration	EvalCER	IterationCER	SubtrainerCER" > "$@"
+	@echo "Name CheckpointCER	LearningIteration	TrainingIteration	EvalCER IterationCER	SubtrainerCER" > "$@"
 	@grep 'BCER eval' $< \
 		| sed -e 's/^.*[0-9]At iteration //' \
 		| sed -e 's/,.* BCER eval=/\t\t/'  \
 		| sed -e 's/, BWER.*$$/\t\t/' \
-		| sed -e 's/^/\t\t/' >>  "$@"
+		| sed -e 's/^/\t\t/' >>	 "$@"
 # Make TSV with Subtrainer CER.
 TSV_SUB = $(OUTPUT_DIR)/sub.tsv
 .INTERMEDIATE: $(TSV_SUB)
 $(TSV_SUB): $(LOG_FILE)
-	@echo "Name	CheckpointCER	LearningIteration	TrainingIteration	EvalCER	IterationCER	SubtrainerCER" > "$@"
+	@echo "Name CheckpointCER	LearningIteration	TrainingIteration	EvalCER IterationCER	SubtrainerCER" > "$@"
 	@grep '^UpdateSubtrainer' $< \
 		| sed -e 's/^.*At iteration \([0-9]*\)\/\([0-9]*\)\/.*BCER train=/\t\t\1\t\2\t\t\t/' \
-		| sed -e 's/%, BWER.*//' >>  "$@"
+		| sed -e 's/%, BWER.*//' >>	 "$@"
 
 $(OUTPUT_DIR)/$(MODEL_NAME).plot_log.png: $(TSV_100_ITERATIONS) $(TSV_CHECKPOINT) $(TSV_EVAL) $(TSV_SUB)
 	$(PY_CMD) plot_log.py $@ $(MODEL_NAME) $^
