@@ -386,14 +386,14 @@ $(BEST_LSTMEVAL_FILES): $(OUTPUT_DIR)/eval/%.eval.log: $(OUTPUT_DIR)/tessdata_be
 TSV_LSTMEVAL = $(OUTPUT_DIR)/lstmeval.tsv
 .INTERMEDIATE: $(TSV_LSTMEVAL)
 $(TSV_LSTMEVAL): $(BEST_LSTMEVAL_FILES)
-	@echo "Name CheckpointCER	LearningIteration	TrainingIteration	EvalCER IterationCER	SubtrainerCER" > "$@"
+	@echo "Name	CheckpointCER	LearningIteration	TrainingIteration	EvalCER	IterationCER	SubtrainerCER" > "$@"
 	@{ $(foreach F,$^,echo -n "$F "; grep BCER $F;) } | sort -rn | \
-	sed -e 's|^$(OUTPUT_DIR)/eval/$(MODEL_NAME)_\([0-9.]*\)_\([0-9]*\)_\([0-9]*\).eval.log BCER eval=\([0-9.]*\).*$$|\t\1\t\2\t\3\t\4\t\t|' >>	"$@"
+	sed -e 's|^$(OUTPUT_DIR)/eval/$(MODEL_NAME)_\([0-9.]*\)_\([0-9]*\)_\([0-9]*\).eval.log BCER eval=\([0-9.]*\).*$$|\t\1\t\2\t\3\t\4\t\t|' >>  "$@"
 # Make TSV with CER at every 100 iterations.
 TSV_100_ITERATIONS = $(OUTPUT_DIR)/iteration.tsv
 .INTERMEDIATE: $(TSV_100_ITERATIONS)
 $(TSV_100_ITERATIONS): $(LOG_FILE)
-	@echo "Name CheckpointCER	LearningIteration	TrainingIteration	EvalCER IterationCER	SubtrainerCER" > "$@"
+	@echo "Name	CheckpointCER	LearningIteration	TrainingIteration	EvalCER	IterationCER	SubtrainerCER" > "$@"
 	@grep 'At iteration' $< \
 		| sed -e '/^Sub/d' \
 		| sed -e '/^Update/d' \
@@ -404,29 +404,29 @@ $(TSV_100_ITERATIONS): $(LOG_FILE)
 TSV_CHECKPOINT = $(OUTPUT_DIR)/checkpoint.tsv
 .INTERMEDIATE: $(TSV_CHECKPOINT)
 $(TSV_CHECKPOINT): $(LOG_FILE)
-	@echo "Name CheckpointCER	LearningIteration	TrainingIteration	EvalCER IterationCER	SubtrainerCER" > "$@"
+	@echo "Name	CheckpointCER	LearningIteration	TrainingIteration	EvalCER	IterationCER	SubtrainerCER" > "$@"
 	@grep 'best model' $< \
 		| sed -e 's/^.*\///' \
 		| sed -e 's/\.checkpoint.*$$/\t\t\t/' \
-		| sed -e 's/_/\t/g' >>	"$@"
+		| sed -e 's/_/\t/g' >>  "$@"
 # Make TSV with Eval CER.
 TSV_EVAL = $(OUTPUT_DIR)/eval.tsv
 .INTERMEDIATE: $(TSV_EVAL)
 $(TSV_EVAL): $(LOG_FILE)
-	@echo "Name CheckpointCER	LearningIteration	TrainingIteration	EvalCER IterationCER	SubtrainerCER" > "$@"
+	@echo "Name	CheckpointCER	LearningIteration	TrainingIteration	EvalCER	IterationCER	SubtrainerCER" > "$@"
 	@grep 'BCER eval' $< \
 		| sed -e 's/^.*[0-9]At iteration //' \
 		| sed -e 's/,.* BCER eval=/\t\t/'  \
 		| sed -e 's/, BWER.*$$/\t\t/' \
-		| sed -e 's/^/\t\t/' >>	 "$@"
+		| sed -e 's/^/\t\t/' >>  "$@"
 # Make TSV with Subtrainer CER.
 TSV_SUB = $(OUTPUT_DIR)/sub.tsv
 .INTERMEDIATE: $(TSV_SUB)
 $(TSV_SUB): $(LOG_FILE)
-	@echo "Name CheckpointCER	LearningIteration	TrainingIteration	EvalCER IterationCER	SubtrainerCER" > "$@"
+	@echo "Name	CheckpointCER	LearningIteration	TrainingIteration	EvalCER	IterationCER	SubtrainerCER" > "$@"
 	@grep '^UpdateSubtrainer' $< \
 		| sed -e 's/^.*At iteration \([0-9]*\)\/\([0-9]*\)\/.*BCER train=/\t\t\1\t\2\t\t\t/' \
-		| sed -e 's/%, BWER.*//' >>	 "$@"
+		| sed -e 's/%, BWER.*//' >>  "$@"
 
 $(OUTPUT_DIR)/$(MODEL_NAME).plot_log.png: $(TSV_100_ITERATIONS) $(TSV_CHECKPOINT) $(TSV_EVAL) $(TSV_SUB)
 	$(PY_CMD) plot_log.py $@ $(MODEL_NAME) $^
