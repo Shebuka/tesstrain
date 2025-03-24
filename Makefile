@@ -208,17 +208,17 @@ $(ALL_GT): $(ALL_FILES) | $(OUTPUT_DIR)
 	$(if $^,,$(error found no $(GROUND_TRUTH_DIR)/*.gt.txt for $@))
 	$(file >$@) $(foreach F,$^,$(file >>$@,$(file <$F)))
 
-# Generate ALL_LSTMF recursively
+# Generate ALL_LSTMF recursively and then shuffle it
 $(ALL_LSTMF): $(ALL_FILES:%.gt.txt=%.lstmf) | $(OUTPUT_DIR)
 	$(if $^,,$(error found no $(GROUND_TRUTH_DIR)/*.lstmf for $@))
 	@mkdir -p $(@D)
 	$(file >$@) $(foreach F,$^,$(file >>$@,$F))
+	$(PY_CMD) shuffle.py $(RANDOM_SEED) "$@"
 
-# Modified list generation with recursive discovery
+# Modified list generation
 $(LIST_TRAIN) $(LIST_EVAL): $(ALL_LSTMF) | $(OUTPUT_DIR)
 	@if [ ! -f $(LIST_TRAIN) ] || [ ! -f $(LIST_EVAL) ]; then \
 		echo "Generating new train/eval lists"; \
-		find -L $(GROUND_TRUTH_DIR) -type f -name '*.lstmf' | sort > $(ALL_LSTMF); \
 		total_files=$$(wc -l < $(ALL_LSTMF)); \
 		train_count=$$(echo "$$total_files * $(RATIO_TRAIN)" | bc | cut -d. -f1); \
 		head -n $$train_count $(ALL_LSTMF) > $(LIST_TRAIN); \
