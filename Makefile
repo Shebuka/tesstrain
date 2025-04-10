@@ -58,7 +58,7 @@ else
 MAX_ITERATIONS := -$(EPOCHS)
 endif
 
-# Debug Interval. Default:  $(DEBUG_INTERVAL)
+# Debug Interval. Default:	$(DEBUG_INTERVAL)
 DEBUG_INTERVAL := 0
 
 # Learning rate. Default: $(LEARNING_RATE)
@@ -208,21 +208,37 @@ $(ALL_GT): $(ALL_FILES) | $(OUTPUT_DIR)
 	$(if $^,,$(error found no $(GROUND_TRUTH_DIR)/*.gt.txt for $@))
 	$(file >$@) $(foreach F,$^,$(file >>$@,$(file <$F)))
 
-# Generate ALL_LSTMF recursively and then shuffle it
+# Generate ALL_LSTMF recursively
 $(ALL_LSTMF): $(ALL_FILES:%.gt.txt=%.lstmf) | $(OUTPUT_DIR)
 	$(if $^,,$(error found no $(GROUND_TRUTH_DIR)/*.lstmf for $@))
 	@mkdir -p $(@D)
 	$(file >$@) $(foreach F,$^,$(file >>$@,$F))
-	$(PY_CMD) shuffle.py $(RANDOM_SEED) "$@"
 
-# Modified list generation
+# Modified list generation with per-subfolder splitting
 $(LIST_TRAIN) $(LIST_EVAL): $(ALL_LSTMF) | $(OUTPUT_DIR)
 	@if [ ! -f $(LIST_TRAIN) ] || [ ! -f $(LIST_EVAL) ]; then \
-		echo "Generating new train/eval lists"; \
-		total_files=$$(wc -l < $(ALL_LSTMF)); \
-		train_count=$$(echo "$$total_files * $(RATIO_TRAIN)" | bc | cut -d. -f1); \
-		head -n $$train_count $(ALL_LSTMF) > $(LIST_TRAIN); \
-		tail -n +$$((train_count + 1)) $(ALL_LSTMF) > $(LIST_EVAL); \
+		echo "Generating new train/eval lists with per-subfolder splitting"; \
+		rm -f $(LIST_TRAIN) $(LIST_EVAL) $(LIST_TRAIN).tmp $(LIST_EVAL).tmp; \
+		find -L $(GROUND_TRUTH_DIR) -type f -name '*.lstmf' | while IFS= read -r file; do \
+			dir=$$(dirname "$$file"); \
+			echo "$$file" >> "$$dir/all-lstmf.tmp"; \
+		done; \
+		find -L $(GROUND_TRUTH_DIR) -type f -name 'all-lstmf.tmp' | while IFS= read -r lstmf; do \
+			$(PY_CMD) shuffle.py $(RANDOM_SEED) "$$lstmf"; \
+			total=$$(wc -l < "$$lstmf"); \
+			if [ $$total -le 1 ]; then \
+				train_count=0; \
+			else \
+				train_count=$$(echo "$$total * $(RATIO_TRAIN)" | bc | cut -d. -f1); \
+				[ "$$train_count" -eq "$$total" ] && train_count=$$((total-1)); \
+			fi; \
+			head -n $$train_count "$$lstmf" >> $(LIST_TRAIN).tmp; \
+			tail -n +$$((train_count + 1)) "$$lstmf" >> $(LIST_EVAL).tmp; \
+		done; \
+		find $(GROUND_TRUTH_DIR) -type f -name 'all-lstmf.tmp' -exec rm -f {} \;; \
+		mv $(LIST_TRAIN).tmp $(LIST_TRAIN); \
+		mv $(LIST_EVAL).tmp $(LIST_EVAL); \
+		cat $(LIST_TRAIN) $(LIST_EVAL) | sort > $(ALL_LSTMF); \
 	else \
 		echo "Using existing train/eval lists"; \
 	fi
@@ -240,7 +256,7 @@ $(OUTPUT_DIR)/unicharset: $(ALL_GT) | $(OUTPUT_DIR)
 	unicharset_extractor --output_unicharset "$@" --norm_mode $(NORM_MODE) "$(ALL_GT)"
 endif
 
-# Start training
+# Modified training target
 training: $(OUTPUT_DIR).traineddata
 	@if [ -f $(LIST_TRAIN) ] && [ -f $(LIST_EVAL) ] && [ -f $(ALL_GT) ] && [ -f $(ALL_LSTMF) ]; then \
 		echo "Using existing data files for training"; \
